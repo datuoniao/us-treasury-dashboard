@@ -10,10 +10,11 @@
 
 ## 在线预览
 
-> 若已启用 GitHub Pages，可直接访问：
-> `https://<用户名>.github.io/us-treasury-dashboard/`
+**https://datuoniao.github.io/us-treasury-dashboard/**
 
-否则，下载 `output/us_treasury_dashboard.html` 后**双击即可打开**（HTML 内已内联 ECharts 与全部数据，无需联网、无需服务器）。
+由 GitHub Actions 自动部署（`.github/workflows/pages.yml`）：每次推送到 `main` 会把 `output/us_treasury_dashboard.html` 作为站点首页发布，**不改变原目录结构**。
+
+也可下载 `output/us_treasury_dashboard.html` 后**双击打开**（HTML 内已内联 ECharts 与全部数据，无需联网、无需服务器）。
 
 ## 数据来源
 
