@@ -192,17 +192,22 @@ def build_debt():
     return {
         "weekly": {k: to_weekly(raw[k], "last", 2) for k in raw},
         "monthly_public": to_monthly_last(raw["public"], 2),
+        "monthly_total": to_monthly_last(raw["total"], 2),
     }
 
 
 MARKETABLE_CLASSES = ["Bills", "Notes", "Bonds",
                       "Treasury Inflation-Protected Securities", "Floating Rate Notes"]
+# 可流通债务中除上述 5 大类外的杂项（如 Federal Financing Bank）统一归入「其他」，
+# 以保证旭日图父环数值 == 子项之和，不出现空白扇区。
+MARKETABLE_OTHER = "Other"
 CLASS_LABEL = {
     "Bills": "短期国库券 Bills",
     "Notes": "中期票据 Notes",
     "Bonds": "长期国债 Bonds",
     "Treasury Inflation-Protected Securities": "通胀保值债券 TIPS",
     "Floating Rate Notes": "浮动利率票据 FRN",
+    MARKETABLE_OTHER: "其他 Other",
 }
 
 
@@ -211,7 +216,9 @@ def build_structure():
     js = json.loads(load_text("fd_mspd_table1.json"))
     rows = js.get("data", [])
     log("  %d 条月度明细" % len(rows))
-    by_month = {}
+    # 分表存储：可流通 / 不可流通，避免两类同名 class 相互污染
+    mkt_by_month = {}
+    nonmkt_by_month = {}
     for r in rows:
         st = r.get("security_type_desc")
         sc = r.get("security_class_desc")
@@ -221,27 +228,33 @@ def build_structure():
             v = float(r["total_mil_amt"]) / 1000.0
         except (TypeError, ValueError, KeyError):
             continue
-        by_month.setdefault(r["record_date"][:7], {})[sc] = v
+        bucket = mkt_by_month if st == "Marketable" else nonmkt_by_month
+        bucket.setdefault(r["record_date"][:7], {})[sc] = v
 
-    months = sorted(by_month)
-    classes = {c: [] for c in MARKETABLE_CLASSES}
+    months = sorted(set(mkt_by_month) | set(nonmkt_by_month))
+    all_classes = MARKETABLE_CLASSES + [MARKETABLE_OTHER]
+    classes = {c: [] for c in all_classes}
     mkt_total, nonmkt = [], []
     for m in months:
-        d = by_month[m]
+        md = mkt_by_month.get(m, {})
+        nd = nonmkt_by_month.get(m, {})
         for c in MARKETABLE_CLASSES:
-            classes[c].append(round(d.get(c, 0.0), 1))
-        mkt_total.append(round(sum(d.get(c, 0.0) for c in MARKETABLE_CLASSES), 1))
-        nonmkt.append(round(sum(v for k, v in d.items() if k not in MARKETABLE_CLASSES), 1))
+            classes[c].append(round(md.get(c, 0.0), 1))
+        # 未归入 5 大类的 Marketable 杂项（如 Federal Financing Bank）→「其他」
+        classes[MARKETABLE_OTHER].append(
+            round(sum(v for k, v in md.items() if k not in MARKETABLE_CLASSES), 1))
+        # 父环 = 全部可流通项之和（与子项之和严格一致，杜绝旭日图空白）
+        mkt_total.append(round(sum(v for v in md.values()), 1))
+        nonmkt.append(round(sum(v for v in nd.values()), 1))
 
     latest_month = months[-1] if months else None
     latest_items = []
     if latest_month:
-        d = by_month[latest_month]
-        for c in MARKETABLE_CLASSES:
-            latest_items.append({"name": CLASS_LABEL[c], "value": round(d.get(c, 0.0), 1)})
+        for c in all_classes:
+            latest_items.append({"name": CLASS_LABEL[c], "value": classes[c][-1]})
     return {
         "months": months,
-        "classes": {CLASS_LABEL[c]: classes[c] for c in MARKETABLE_CLASSES},
+        "classes": {CLASS_LABEL[c]: classes[c] for c in all_classes},
         "marketable_total": mkt_total,
         "nonmarketable_total": nonmkt,
         "latest_month": latest_month,

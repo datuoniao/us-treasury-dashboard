@@ -192,7 +192,7 @@
         <div class="chart tall" id="c_tic_bar"></div>
       </div>
       <div class="card">
-        <div class="card-hd"><span>外资持债总量与占公众持有债务比重</span></div>
+        <div class="card-hd"><span>外资持债总量与占联邦债务总额比重</span></div>
         <div class="chart" id="c_tic_share"></div>
       </div>
     </div>
@@ -308,12 +308,13 @@
       var jp = tic.focus[0].data[m-1], cn = tic.focus[1].data[m-1];
       var prevIdx = Math.max(0, m-13);
       var cnYoY = (cn!=null && tic.focus[1].data[prevIdx]!=null) ? (cn-tic.focus[1].data[prevIdx]) : null;
-      // 占公众持有债务比重
-      var pubMap = {}; D.debt.monthly_public.forEach(function(p){pubMap[p[0]]=p[1];});
-      var refPub = pubMap[lastM];
-      var share = refPub ? (tot/refPub*100) : null;
+      // 占联邦债务总额比重（TIC 外资口径对应全部美债，故分母用联邦债务总额，
+      // 而非仅剔除政府内部持有的“公众持有债务”，否则占比会被系统性高估）
+      var totMap = {}; (D.debt.monthly_total||[]).forEach(function(p){totMap[p[0]]=p[1];});
+      var refTot = totMap[lastM];
+      var share = refTot ? (tot/refTot*100) : null;
       document.getElementById('kpis3').innerHTML =
-        kpiCard('外资持债总额 <span class="hint">('+lastM+')</span>', fmtT(tot), '占公众持有债务 '+(share==null?'—':share.toFixed(1)+'%')) +
+        kpiCard('外资持债总额 <span class="hint">('+lastM+')</span>', fmtT(tot), '占联邦债务总额 '+(share==null?'—':share.toFixed(1)+'%')) +
         kpiCard('最大持有方', tic.latest_rank[0] ? tic.latest_rank[0].name : '—', tic.latest_rank[0] ? fmtT(tic.latest_rank[0].value) : '—') +
         kpiCard('中国大陆持仓', fmtT(cn), '同比 '+deltaSpan(cnYoY,' 十亿',1)) +
         kpiCard('日本持仓', fmtT(jp), '最大海外持有方');
@@ -386,9 +387,10 @@
     var mkt = D.structure.latest_items.map(function(it,i){
       return {name:it.name, value:it.value, itemStyle:{color:t.palette[(i+2) % t.palette.length]}};
     });
+    // 父环节点不设 value：ECharts 会以子项之和决定父块角度，
+    // 从而保证父环与子块严格对齐，不会出现空白扇区。
     var data = [
-      {name:'可流通 Marketable', value:D.structure.latest_marketable, children:mkt,
-       itemStyle:{color:t.palette[0]}},
+      {name:'可流通 Marketable', children:mkt, itemStyle:{color:t.palette[0]}},
       {name:'不可流通 Nonmarketable', value:D.structure.latest_nonmarketable,
        itemStyle:{color:t.palette[1]}}
     ];
@@ -399,7 +401,7 @@
         trigger:'item', valueFormatter:function(v){ return v==null?'—':(v/1000).toFixed(3)+' 万亿美元'; }
       }),
       series:[{
-        type:'sunburst', data:data, radius:['16%','92%'], sort:'desc',
+        type:'sunburst', data:data, radius:['16%','92%'],
         itemStyle:{borderColor:t.tipBg, borderWidth:1.5},
         label:{color:'#fff', fontSize:11, minAngle:8,
           formatter:function(p){ var v=p.value; return p.name.split(' ')[0]+'\n'+(v==null?'':(v/1000).toFixed(2)+'万亿'); }},
@@ -613,14 +615,15 @@
     var t = T(), ch = charts.c_tic_share; if(!ch || !D.tic) return;
     var cut = mc();
     var months = D.tic.months;
-    var pubMap = {}; D.debt.monthly_public.forEach(function(p){pubMap[p[0]]=p[1];});
+    // 分母用联邦债务总额（月频），与 TIC「全部海外持仓」口径对齐
+    var totMap = {}; (D.debt.monthly_total||[]).forEach(function(p){totMap[p[0]]=p[1];});
     var bars=[], line=[];
     months.forEach(function(m,j){
       if(cut && m<cut) return;
       var v = D.tic.total[j];
       bars.push([m, v==null?0:v]);
-      var p = pubMap[m];
-      line.push([m, (p && v!=null) ? +((v/p)*100).toFixed(2) : null]);
+      var d = totMap[m];
+      line.push([m, (d && v!=null) ? +((v/d)*100).toFixed(2) : null]);
     });
     ch.setOption({
       color:t.palette, grid:Object.assign(baseGrid(t),{right:62}), legend:legendCommon(t),
@@ -636,7 +639,7 @@
       ],
       series:[
         {name:'外资持债总量', type:'bar', data:bars, barWidth:'55%', itemStyle:{color:bg(t.palette[0],.72)}},
-        {name:'占公众持有债务比重', type:'line', yAxisIndex:1, showSymbol:false, connectNulls:true, smooth:true,
+        {name:'占联邦债务总额比重', type:'line', yAxisIndex:1, showSymbol:false, connectNulls:true, smooth:true,
          lineStyle:{width:2.4}, itemStyle:{color:t.palette[1]}, data:line}
       ]
     }, true);
