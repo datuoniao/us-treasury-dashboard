@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 日志与临时产物
+*.log
+tmp/
+*.tmp
+
+# 说明：本项目按「全量上传」策略，以下目录/文件均纳入版本管理，故不在此忽略：
+#   data_raw/          —— 原始数据底表（可复现，便于离线重建）
+#   cache_data.json    —— 中间解析缓存（构建输入）
+#   output/            —— 最终单文件看板 HTML（交付物）
+#   vendor/            —— 内联用 ECharts 源文件

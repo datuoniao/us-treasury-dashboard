@@ -1,0 +1,510 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+美国国债数据看板 - 数据处理与构建脚本 (纯本地, 不联网)
+
+原始数据由 fetch_data.sh 用 curl 抓取到 data_raw/, 本脚本只做解析、重采样与页面生成。
+
+数据源:
+  - 美国财政部 收益率曲线 (名义 + TIPS 实际)  [日频 -> 本地重采样为周频]
+  - Treasury Fiscal Data: Debt to the Penny / MSPD 债务结构 [日频 -> 周频 / 月频]
+  - TIC: 各国持有美债 (mfhhis01 历史 + slt_table5 最新)  [月频]
+
+输出: output/us_treasury_dashboard.html  (单文件自包含, 内联 ECharts + 数据)
+"""
+import csv
+import io
+import json
+import os
+import re
+import sys
+from datetime import date, datetime, timedelta
+
+BASE = os.path.dirname(os.path.abspath(__file__))
+RAW = os.path.join(BASE, "data_raw")
+VENDOR_ECHARTS = os.path.join(BASE, "vendor", "echarts.min.js")
+TEMPLATE = os.path.join(BASE, "template.html")
+OUTDIR = os.path.join(BASE, "output")
+OUTFILE = os.path.join(OUTDIR, "us_treasury_dashboard.html")
+CACHE = os.path.join(BASE, "cache_data.json")
+
+START_YEAR = 2006
+
+
+def log(msg):
+    print("[%s] %s" % (datetime.now().strftime("%H:%M:%S"), msg), flush=True)
+
+
+def load_text(name):
+    with open(os.path.join(RAW, name), "r", encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
+# ----------------------------------------------------------------------------
+# 周频重采样
+# ----------------------------------------------------------------------------
+def week_friday(d):
+    return d + timedelta(days=(4 - d.weekday()))
+
+
+def to_weekly(pairs, how="mean", ndigits=3):
+    buckets = {}
+    for ds, v in pairs:
+        if v is None:
+            continue
+        try:
+            d = date.fromisoformat(ds)
+        except ValueError:
+            continue
+        buckets.setdefault(week_friday(d), []).append((d, v))
+    out = []
+    for f in sorted(buckets):
+        items = sorted(buckets[f], key=lambda x: x[0])
+        val = items[-1][1] if how == "last" else sum(x[1] for x in items) / len(items)
+        out.append((f.isoformat(), round(val, ndigits)))
+    return out
+
+
+def to_monthly_last(pairs, ndigits=2):
+    buckets = {}
+    for ds, v in pairs:
+        if v is None:
+            continue
+        buckets[ds[:7]] = v
+    return [(m, round(v, ndigits)) for m, v in sorted(buckets.items())]
+
+
+# ----------------------------------------------------------------------------
+# 财政部收益率曲线
+# ----------------------------------------------------------------------------
+NOMINAL_MAP = {
+    "1 Mo": "1月", "2 Mo": "2月", "3 Mo": "3月", "4 Mo": "4月", "6 Mo": "6月",
+    "1 Yr": "1年", "2 Yr": "2年", "3 Yr": "3年", "5 Yr": "5年", "7 Yr": "7年",
+    "10 Yr": "10年", "20 Yr": "20年", "30 Yr": "30年",
+}
+REAL_MAP = {"5 YR": "实际5年", "7 YR": "实际7年", "10 YR": "实际10年",
+            "20 YR": "实际20年", "30 YR": "实际30年"}
+
+
+def parse_mdy(s):
+    m, d, y = s.strip().split("/")
+    return "%04d-%02d-%02d" % (int(y), int(m), int(d))
+
+
+def parse_tsy_file(path, cmap):
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        text = f.read()
+    reader = csv.reader(io.StringIO(text))
+    header = None
+    out = []
+    for row in reader:
+        if not row:
+            continue
+        if header is None:
+            header = [c.strip().lstrip("\ufeff") for c in row]
+            continue
+        raw_d = row[0].strip()
+        if not raw_d or "/" not in raw_d:
+            continue
+        try:
+            iso = parse_mdy(raw_d)
+        except ValueError:
+            continue
+        rec = {}
+        for i, col in enumerate(header[1:], start=1):
+            key = cmap.get(col)
+            if not key or i >= len(row):
+                continue
+            v = row[i].strip()
+            if v in ("", ".", "N/A", "n/a", "NA"):
+                continue
+            try:
+                rec[key] = float(v)
+            except ValueError:
+                continue
+        out.append((iso, rec))
+    out.sort(key=lambda x: x[0])
+    return out
+
+
+def build_yields():
+    log("解析财政部收益率曲线 ...")
+    nom_rows, real_rows = [], []
+    for y in range(START_YEAR, date.today().year + 1):
+        pn = os.path.join(RAW, "tsy_nominal_%d.csv" % y)
+        pr = os.path.join(RAW, "tsy_real_%d.csv" % y)
+        if os.path.exists(pn):
+            nom_rows.extend(parse_tsy_file(pn, NOMINAL_MAP))
+        if os.path.exists(pr):
+            real_rows.extend(parse_tsy_file(pr, REAL_MAP))
+    nom_rows.sort(key=lambda x: x[0])
+    real_rows.sort(key=lambda x: x[0])
+    log("  名义 %d 个交易日, 实际(TIPS) %d 个交易日" % (len(nom_rows), len(real_rows)))
+
+    terms = ["1月", "2月", "3月", "4月", "6月", "1年", "2年", "3年", "5年", "7年", "10年", "20年", "30年"]
+    series = {}
+    for k in terms:
+        series[k] = to_weekly([(d, r.get(k)) for d, r in nom_rows if k in r], "mean", 3)
+
+    # 关键利差 (自行计算)
+    t2 = {d: r.get("2年") for d, r in nom_rows}
+    t3m = {d: r.get("3月") for d, r in nom_rows}
+    t10 = {d: r.get("10年") for d, r in nom_rows}
+    sp_2y = [(d, round(t10[d] - t2[d], 3)) for d in sorted(t10)
+             if t10.get(d) is not None and t2.get(d) is not None]
+    sp_3m = [(d, round(t10[d] - t3m[d], 3)) for d in sorted(t10)
+             if t10.get(d) is not None and t3m.get(d) is not None]
+    spreads = {"10Y-2Y": to_weekly(sp_2y, "mean", 3), "10Y-3M": to_weekly(sp_3m, "mean", 3)}
+
+    # 实际利率与隐含通胀预期
+    real10 = {d: r.get("实际10年") for d, r in real_rows}
+    be_pairs = [(d, t10[d] - real10[d]) for d in sorted(t10)
+                if t10.get(d) is not None and real10.get(d) is not None]
+    real = {
+        "名义10年": to_weekly([(d, r.get("10年")) for d, r in nom_rows if "10年" in r], "mean", 3),
+        "实际10年": to_weekly([(d, r.get("实际10年")) for d, r in real_rows if "实际10年" in r], "mean", 3),
+        "通胀预期10年": to_weekly(be_pairs, "mean", 3),
+    }
+    return {"series": series, "spreads": spreads, "real": real}
+
+
+# ----------------------------------------------------------------------------
+# Fiscal Data
+# ----------------------------------------------------------------------------
+def build_debt():
+    log("解析 Debt to the Penny ...")
+    js = json.loads(load_text("fd_debt_to_penny.json"))
+    rows = js.get("data", [])
+    raw = {"total": [], "public": [], "intragov": []}
+    for r in rows:
+        d = r.get("record_date")
+        if not d:
+            continue
+        try:
+            raw["total"].append((d, float(r["tot_pub_debt_out_amt"]) / 1e9))
+            raw["public"].append((d, float(r["debt_held_public_amt"]) / 1e9))
+            raw["intragov"].append((d, float(r["intragov_hold_amt"]) / 1e9))
+        except (TypeError, ValueError, KeyError):
+            continue
+    for k in raw:
+        raw[k].sort(key=lambda x: x[0])
+    log("  %d 条日频记录" % len(raw["total"]))
+    return {
+        "weekly": {k: to_weekly(raw[k], "last", 2) for k in raw},
+        "monthly_public": to_monthly_last(raw["public"], 2),
+    }
+
+
+MARKETABLE_CLASSES = ["Bills", "Notes", "Bonds",
+                      "Treasury Inflation-Protected Securities", "Floating Rate Notes"]
+CLASS_LABEL = {
+    "Bills": "短期国库券 Bills",
+    "Notes": "中期票据 Notes",
+    "Bonds": "长期国债 Bonds",
+    "Treasury Inflation-Protected Securities": "通胀保值债券 TIPS",
+    "Floating Rate Notes": "浮动利率票据 FRN",
+}
+
+
+def build_structure():
+    log("解析 MSPD 债务结构 ...")
+    js = json.loads(load_text("fd_mspd_table1.json"))
+    rows = js.get("data", [])
+    log("  %d 条月度明细" % len(rows))
+    by_month = {}
+    for r in rows:
+        st = r.get("security_type_desc")
+        sc = r.get("security_class_desc")
+        if st not in ("Marketable", "Nonmarketable"):
+            continue
+        try:
+            v = float(r["total_mil_amt"]) / 1000.0
+        except (TypeError, ValueError, KeyError):
+            continue
+        by_month.setdefault(r["record_date"][:7], {})[sc] = v
+
+    months = sorted(by_month)
+    classes = {c: [] for c in MARKETABLE_CLASSES}
+    mkt_total, nonmkt = [], []
+    for m in months:
+        d = by_month[m]
+        for c in MARKETABLE_CLASSES:
+            classes[c].append(round(d.get(c, 0.0), 1))
+        mkt_total.append(round(sum(d.get(c, 0.0) for c in MARKETABLE_CLASSES), 1))
+        nonmkt.append(round(sum(v for k, v in d.items() if k not in MARKETABLE_CLASSES), 1))
+
+    latest_month = months[-1] if months else None
+    latest_items = []
+    if latest_month:
+        d = by_month[latest_month]
+        for c in MARKETABLE_CLASSES:
+            latest_items.append({"name": CLASS_LABEL[c], "value": round(d.get(c, 0.0), 1)})
+    return {
+        "months": months,
+        "classes": {CLASS_LABEL[c]: classes[c] for c in MARKETABLE_CLASSES},
+        "marketable_total": mkt_total,
+        "nonmarketable_total": nonmkt,
+        "latest_month": latest_month,
+        "latest_items": latest_items,
+        "latest_marketable": mkt_total[-1] if mkt_total else 0,
+        "latest_nonmarketable": nonmkt[-1] if nonmkt else 0,
+    }
+
+
+# ----------------------------------------------------------------------------
+# TIC
+# ----------------------------------------------------------------------------
+MONTHS_ABBR = {"Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+               "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12}
+CN_NAME = {
+    "Japan": "日本", "China, Mainland": "中国大陆", "United Kingdom": "英国",
+    "Belgium": "比利时", "Canada": "加拿大", "Luxembourg": "卢森堡",
+    "Cayman Islands": "开曼群岛", "France": "法国", "Ireland": "爱尔兰",
+    "Taiwan": "中国台湾", "Switzerland": "瑞士", "Singapore": "新加坡",
+    "Hong Kong": "中国香港", "Norway": "挪威", "India": "印度", "Brazil": "巴西",
+    "Saudi Arabia": "沙特阿拉伯", "Korea, South": "韩国", "Israel": "以色列",
+    "Germany": "德国", "Bermuda": "百慕大", "United Arab Emirates": "阿联酋",
+    "El Salvador": "萨尔瓦多", "Mexico": "墨西哥", "Thailand": "泰国",
+    "Spain": "西班牙", "Australia": "澳大利亚", "Netherlands": "荷兰",
+    "Kuwait": "科威特", "Italy": "意大利", "Philippines": "菲律宾",
+    "All Other": "其他", "Grand Total": "合计",
+}
+# 解析时需保留 "Grand Total" / "Of Which: Foreign Official" 等聚合行(用于总量与官方/私人拆分),
+# 仅在国家级排行/构成中排除它们。
+PARSE_SKIP = {"Country", "Total", "Oil exporters", "Caribbean Banking Centers",
+              "Belgium-Luxembourg"}
+NON_COUNTRY = {"Grand Total", "All Other", "Of Which: Foreign Official",
+               "Of Which: Foreign Official Treasury Bills",
+               "Of Which: Foreign Official T-Bonds & Notes"}
+
+
+def is_country(name):
+    return name not in NON_COUNTRY and not name.startswith("Of Which")
+
+
+def _num(s):
+    s = s.strip().replace(",", "")
+    if s in ("", "n.a.", "NA", "*", "-", "N/A"):
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+# 历史文件中部分国家名带脚注编号, 如 "United Kingdom 2/"
+FOOTNOTE_RE = re.compile(r"\s+\d+/\s*$")
+
+
+def norm_name(s):
+    return FOOTNOTE_RE.sub("", s.strip()).strip()
+
+
+def parse_mfhhis(text):
+    panel = {}
+    key_cols = []
+    reader = csv.reader(io.StringIO(text), delimiter="\t", quotechar='"')
+    for cells in reader:
+        if not cells:
+            continue
+        first = norm_name(cells[0])
+        if first == "" and any(c.strip() in MONTHS_ABBR for c in cells[1:4]):
+            mons = [MONTHS_ABBR[c.strip()] for c in cells[1:] if c.strip() in MONTHS_ABBR]
+            if mons:
+                key_cols = [(m, None) for m in mons]
+            continue
+        if first == "Country":
+            years = []
+            for c in cells[1:]:
+                c = c.strip()
+                years.append(int(c) if c.isdigit() else None)
+            key_cols = [(key_cols[i][0], years[i]) if i < len(years) else (None, None)
+                        for i in range(len(key_cols))]
+            continue
+        if not key_cols or first in PARSE_SKIP:
+            continue
+        for i, c in enumerate(cells[1:]):
+            if i >= len(key_cols):
+                break
+            mm, yy = key_cols[i]
+            if not mm or not yy:
+                continue
+            v = _num(c)
+            if v is None:
+                continue
+            panel.setdefault("%04d-%02d" % (yy, mm), {})[first] = v
+    return panel
+
+
+def parse_slt5(text):
+    panel = {}
+    header = None
+    reader = csv.reader(io.StringIO(text), delimiter="\t", quotechar='"')
+    for cells in reader:
+        if not cells:
+            continue
+        first = norm_name(cells[0])
+        if first == "Country":
+            header = [c.strip() for c in cells[1:]]
+            continue
+        if header is None or first in PARSE_SKIP:
+            continue
+        for i, c in enumerate(cells[1:]):
+            if i >= len(header):
+                break
+            mk = header[i]
+            if len(mk) != 7 or mk[4] != "-":
+                continue
+            v = _num(c)
+            if v is None:
+                continue
+            panel.setdefault(mk, {})[first] = v
+    return panel
+
+
+def build_tic():
+    log("解析 TIC 海外持仓 ...")
+    panel = {}
+    try:
+        for k, v in parse_mfhhis(load_text("tic_mfhhis01.txt")).items():
+            panel.setdefault(k, {}).update(v)
+    except Exception as e:
+        log("  ! mfhhis01: %s" % e)
+    try:
+        for k, v in parse_slt5(load_text("tic_slt_table5.txt")).items():
+            panel.setdefault(k, {}).update(v)
+    except Exception as e:
+        log("  ! slt_table5: %s" % e)
+
+    months = sorted(m for m in panel if m >= "%d-01" % START_YEAR)
+    if not months:
+        return None
+    log("  %d 个月, 最新 %s" % (len(months), months[-1]))
+
+    def spec(name):
+        return [round(panel[m][name], 1) if name in panel[m] else None for m in months]
+
+    total = spec("Grand Total")
+    official = spec("Of Which: Foreign Official")
+    private = [None if (t is None or o is None) else round(t - o, 1) for t, o in zip(total, official)]
+
+    focus = ["Japan", "China, Mainland", "United Kingdom"]
+    focus_series = [{"name": CN_NAME.get(n, n), "data": spec(n)} for n in focus]
+
+    last = months[-1]
+    rank = sorted([(n, v) for n, v in panel[last].items() if is_country(n)],
+                  key=lambda x: -x[1])
+    latest_rank = [{"name": CN_NAME.get(n, n), "en": n, "value": round(v, 1)} for n, v in rank[:15]]
+
+    top8 = [n for n, _ in rank[:8]]
+    comp = [{"name": CN_NAME.get(n, n), "data": spec(n)} for n in top8]
+    other = []
+    for i, m in enumerate(months):
+        s, has = 0.0, False
+        for n in top8:
+            if n in panel[m]:
+                s += panel[m][n]
+                has = True
+        other.append(round(total[i] - s, 1) if (has and total[i] is not None) else None)
+    comp.append({"name": "其他", "data": other})
+
+    return {
+        "months": months, "focus": focus_series, "components": comp,
+        "total": total, "official": official, "private": private,
+        "latest_rank": latest_rank, "latest_month": last,
+    }
+
+
+# ----------------------------------------------------------------------------
+# 曲线快照
+# ----------------------------------------------------------------------------
+def nearest_on_or_before(pairs, tgt):
+    best = None
+    for d, v in pairs:
+        if d <= tgt:
+            best = (d, v)
+        else:
+            break
+    return best
+
+
+def build_curve(yields, latest_iso):
+    maturities = ["1月", "3月", "6月", "1年", "2年", "3年", "5年", "7年", "10年", "20年", "30年"]
+    anchors = [("最新", 0), ("1个月前", 30), ("1年前", 365), ("5年前", 365 * 5),
+               ("10年前", 365 * 10), ("20年前", 365 * 20)]
+    base = date.fromisoformat(latest_iso)
+    snaps = []
+    for label, days in anchors:
+        tgt = (base - timedelta(days=days)).isoformat()
+        vals, ok = [], False
+        for m in maturities:
+            p = nearest_on_or_before(yields["series"].get(m, []), tgt)
+            if p:
+                vals.append(p[1]); ok = True
+            else:
+                vals.append(None)
+        if ok:
+            snaps.append({"label": label, "date": tgt, "values": vals})
+    return {"maturities": maturities, "snapshots": snaps}
+
+
+# ----------------------------------------------------------------------------
+def main():
+    data = {}
+    data["yields"] = build_yields()
+    data["debt"] = build_debt()
+    data["structure"] = build_structure()
+    data["tic"] = build_tic()
+
+    y_dates = [d for s in data["yields"]["series"].values() for d, _ in s]
+    latest_yield = max(y_dates) if y_dates else None
+    if latest_yield:
+        data["curve"] = build_curve(data["yields"], latest_yield)
+
+    dw = data["debt"]["weekly"]["total"]
+    data["meta"] = {
+        "generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "start_year": START_YEAR,
+        "latest_yield": latest_yield,
+        "latest_debt": dw[-1][0] if dw else None,
+        "latest_structure": data["structure"]["latest_month"],
+        "latest_tic": data["tic"]["latest_month"] if data["tic"] else None,
+        "sources": [
+            "美国财政部 U.S. Treasury - Daily Treasury Par Yield Curve / Real Yield Curve (H.15 原始来源)",
+            "美国财政部 Fiscal Data - Debt to the Penny / MSPD 月度债务报表",
+            "美国财政部 TIC - Major Foreign Holders of Treasury Securities",
+        ],
+    }
+
+    if not data["structure"]["months"] or not (data["tic"] and data["tic"]["months"]) \
+            or not data["yields"]["series"].get("10年"):
+        if os.path.exists(CACHE):
+            log("! 关键数据缺失, 复用上次缓存")
+            with open(CACHE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+    else:
+        with open(CACHE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+
+    with open(TEMPLATE, "r", encoding="utf-8") as f:
+        html = f.read()
+    with open(VENDOR_ECHARTS, "r", encoding="utf-8") as f:
+        echarts = f.read()
+
+    data_json = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+    echarts = echarts.replace("</script", "<\\/script")
+    html = html.replace("/*__ECHARTS__*/", echarts).replace("__DASH_DATA__", data_json)
+
+    os.makedirs(OUTDIR, exist_ok=True)
+    with open(OUTFILE, "w", encoding="utf-8") as f:
+        f.write(html)
+
+    log("完成 -> %s (%.2f MB)" % (OUTFILE, os.path.getsize(OUTFILE) / 1024 / 1024))
+    log("  收益率最新 %s | 债务最新 %s | 结构最新 %s | TIC 最新 %s"
+        % (data["meta"]["latest_yield"], data["meta"]["latest_debt"],
+           data["meta"]["latest_structure"], data["meta"]["latest_tic"]))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

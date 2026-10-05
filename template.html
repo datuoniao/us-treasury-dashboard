@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>美国国债数据看板</title>
+<style>
+  :root{
+    --bg:#f6f8fb; --panel:#ffffff; --panel-2:#fbfcfe; --border:#e6eaf0;
+    --fg:#1f2937; --fg-sub:#6b7280; --fg-mute:#9aa4b2;
+    --accent:#2563eb; --up:#dc2626; --down:#16a34a;
+    --shadow:0 1px 2px rgba(16,24,40,.04),0 6px 20px rgba(16,24,40,.06);
+    --topbar:rgba(255,255,255,.88);
+  }
+  html[data-theme="dark"]{
+    --bg:#0d1117; --panel:#161b22; --panel-2:#1b2129; --border:#2a313c;
+    --fg:#e6edf3; --fg-sub:#9da7b3; --fg-mute:#6e7781;
+    --accent:#58a6ff; --up:#f85149; --down:#3fb950;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.35);
+    --topbar:rgba(13,17,23,.88);
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",Roboto,Helvetica,Arial,sans-serif;
+    font-size:14px; line-height:1.5; -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1560px;margin:0 auto;padding:0 22px 60px}
+  /* topbar */
+  .topbar{
+    position:sticky;top:0;z-index:50;backdrop-filter:saturate(180%) blur(10px);
+    background:var(--topbar);border-bottom:1px solid var(--border);
+    display:flex;align-items:center;justify-content:space-between;gap:16px;
+    padding:14px 22px;flex-wrap:wrap;
+  }
+  .brand h1{margin:0;font-size:19px;font-weight:700;letter-spacing:.2px}
+  .brand p{margin:3px 0 0;font-size:12px;color:var(--fg-sub)}
+  .controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .seg{display:inline-flex;background:var(--panel);border:1px solid var(--border);border-radius:9px;overflow:hidden;box-shadow:var(--shadow)}
+  .seg button{
+    border:0;background:transparent;color:var(--fg-sub);padding:7px 13px;font-size:12.5px;cursor:pointer;
+    font-family:inherit;transition:.15s;
+  }
+  .seg button:hover{color:var(--fg)}
+  .seg button.active{background:var(--accent);color:#fff}
+  .iconbtn{
+    border:1px solid var(--border);background:var(--panel);color:var(--fg);
+    border-radius:9px;padding:7px 13px;font-size:12.5px;cursor:pointer;font-family:inherit;
+    box-shadow:var(--shadow);transition:.15s;
+  }
+  .iconbtn:hover{border-color:var(--accent);color:var(--accent)}
+  /* sections */
+  .block{margin-top:26px}
+  .block > h2{
+    font-size:15.5px;font-weight:700;margin:0 0 14px;padding-left:11px;position:relative;
+  }
+  .block > h2::before{
+    content:"";position:absolute;left:0;top:2px;bottom:2px;width:3.5px;border-radius:3px;background:var(--accent);
+  }
+  .block > h2 small{font-weight:400;color:var(--fg-mute);font-size:12px;margin-left:8px}
+  /* kpis */
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:16px}
+  .kpi{
+    background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 16px;box-shadow:var(--shadow);
+  }
+  .kpi .k-label{font-size:12px;color:var(--fg-sub);display:flex;align-items:center;gap:6px}
+  .kpi .k-value{font-size:22px;font-weight:700;margin-top:7px;letter-spacing:.2px;font-variant-numeric:tabular-nums}
+  .kpi .k-delta{font-size:12px;margin-top:5px;color:var(--fg-sub);font-variant-numeric:tabular-nums}
+  .up{color:var(--up)} .down{color:var(--down)}
+  /* grid / cards */
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+  .card{
+    background:var(--panel);border:1px solid var(--border);border-radius:12px;
+    box-shadow:var(--shadow);padding:14px 16px 8px;min-width:0;
+  }
+  .card.wide{grid-column:span 2}
+  .card-hd{
+    display:flex;align-items:center;justify-content:space-between;gap:10px;
+    font-size:13.5px;font-weight:600;margin-bottom:6px;padding-bottom:9px;border-bottom:1px dashed var(--border);flex-wrap:wrap;
+  }
+  .card-hd .hint{font-size:11.5px;font-weight:400;color:var(--fg-mute)}
+  .chart{width:100%;height:320px}
+  .chart.tall{height:360px}
+  .chart.short{height:290px}
+  .mini{display:inline-flex;background:var(--panel-2);border:1px solid var(--border);border-radius:8px;overflow:hidden}
+  .mini button{border:0;background:transparent;color:var(--fg-sub);padding:4px 10px;font-size:11.5px;cursor:pointer;font-family:inherit}
+  .mini button.active{background:var(--accent);color:#fff}
+  /* footer */
+  .foot{margin-top:34px;padding-top:18px;border-top:1px solid var(--border);color:var(--fg-sub);font-size:12px}
+  .foot ul{margin:8px 0 0;padding-left:18px}
+  .foot li{margin:3px 0}
+  #errBox{display:none;margin:10px 0;padding:10px 14px;border-radius:10px;border:1px solid #f0b4b4;background:rgba(220,38,38,.08);color:#b91c1c;font-size:12.5px}
+  .badge{display:inline-block;background:var(--panel-2);border:1px solid var(--border);border-radius:6px;padding:1px 7px;font-size:11px;color:var(--fg-sub);margin-right:6px}
+  @media (max-width:1080px){
+    .kpis{grid-template-columns:repeat(2,1fr)}
+    .grid{grid-template-columns:1fr}
+    .card.wide{grid-column:span 1}
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <h1>美国国债数据看板</h1>
+    <p>US Treasury Dashboard · 规模与结构 · 收益率与曲线 · 海外持仓 (TIC)</p>
+  </div>
+  <div class="controls">
+    <div class="seg" id="rangeSeg">
+      <button data-years="5">近5年</button>
+      <button data-years="10">近10年</button>
+      <button data-years="20" class="active">近20年</button>
+      <button data-years="0">全部</button>
+    </div>
+    <button class="iconbtn" id="themeBtn">切换暗色</button>
+  </div>
+</header>
+
+<div class="wrap">
+  <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:14px 0 2px;color:var(--fg-sub);font-size:12.5px">
+    <span>数据更新：<b id="genTime" style="color:var(--fg)">—</b></span>
+    <span class="badge">收益率：周频（周均）</span>
+    <span class="badge">债务规模：周频</span>
+    <span class="badge">债务结构 / TIC：月频</span>
+    <span class="badge">已剔除日频展示</span>
+  </div>
+  <div id="errBox"></div>
+
+  <!-- ============ 模块一 ============ -->
+  <section class="block">
+    <h2>一、规模与结构 <small>联邦债务总额、可流通/不可流通构成</small></h2>
+    <div class="kpis" id="kpis1"></div>
+    <div class="grid">
+      <div class="card wide">
+        <div class="card-hd">
+          <span>债务规模走势（周频）</span>
+          <span class="mini" id="debtMode">
+            <button data-mode="abs" class="active">绝对值</button>
+            <button data-mode="yoy">同比 %</button>
+          </span>
+        </div>
+        <div class="chart tall" id="c_debt"></div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><span>最新月债务结构</span><span class="hint" id="structHint"></span></div>
+        <div class="chart" id="c_struct_sun"></div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><span>可流通国债券种构成（月度）</span></div>
+        <div class="chart" id="c_struct_area"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 模块二 ============ -->
+  <section class="block">
+    <h2>二、收益率与曲线 <small>全期限周均收益率、曲线形态演化、利差与倒挂</small></h2>
+    <div class="grid">
+      <div class="card wide">
+        <div class="card-hd"><span>关键期限收益率（周频）</span><span class="hint">图例可点选，默认展示 2 / 10 / 30 年</span></div>
+        <div class="chart tall" id="c_yield"></div>
+      </div>
+      <div class="card wide">
+        <div class="card-hd"><span>收益率曲线形态演化</span><span class="hint">最新 vs 历史各时点</span></div>
+        <div class="chart tall" id="c_curve"></div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><span>关键利差与倒挂（周频）</span><span class="hint">红色阴影＝倒挂</span></div>
+        <div class="chart" id="c_spread"></div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><span>名义利率 · 实际利率 · 通胀预期</span><span class="hint">10 年期（周频）</span></div>
+        <div class="chart" id="c_real"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 模块三 ============ -->
+  <section class="block">
+    <h2>三、海外持仓 TIC <small>各国持有美债规模与占比</small></h2>
+    <div class="kpis" id="kpis3"></div>
+    <div class="grid">
+      <div class="card wide">
+        <div class="card-hd"><span>主要国家/地区持仓走势（月度）</span><span class="hint">日本 · 中国大陆 · 英国</span></div>
+        <div class="chart tall" id="c_tic_lines"></div>
+      </div>
+      <div class="card wide">
+        <div class="card-hd"><span>海外持仓构成演变（月度）</span><span class="hint">最新月前 8 大持有方 + 其他</span></div>
+        <div class="chart tall" id="c_tic_area"></div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><span>最新月持有方排名 Top 15</span><span class="hint" id="ticHint"></span></div>
+        <div class="chart tall" id="c_tic_bar"></div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><span>外资持债总量与占公众持有债务比重</span></div>
+        <div class="chart" id="c_tic_share"></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="foot">
+    <div><b>数据口径说明</b></div>
+    <ul id="srcList"></ul>
+    <li>本看板不使用日频数据：日频来源（收益率、逐日债务）均已按 <b>周五周均 / 周末值</b> 重采样为周频；TIC 与债务结构保留其天然月频。</li>
+    <li>TIC 持仓按<b>托管地</b>而非实际持有人统计，无法精确归属各国真实持有量。</li>
+    <li>涨跌类配色遵循中文市场习惯：<span class="up">上涨为红</span>、<span class="down">下跌为绿</span>。</li>
+  </div>
+</div>
+
+<script>/*__ECHARTS__*/</script>
+<script id="dash-data" type="application/json">__DASH_DATA__</script>
+<script>
+(function(){
+  "use strict";
+  var D = JSON.parse(document.getElementById('dash-data').textContent);
+  var charts = {};
+  var state = { years: 20, debtMode: 'abs', dark: document.documentElement.getAttribute('data-theme')==='dark' };
+
+  function T(){
+    return state.dark ? {
+      text:'#e6edf3', sub:'#9da7b3', axis:'#38414d', split:'#242c37',
+      tipBg:'rgba(22,27,34,.96)', tipBorder:'#38414d', tipText:'#e6edf3',
+      palette:['#58a6ff','#f0883e','#3fb950','#bc8cff','#f778ba','#39c5cf','#e3b341','#7ee787','#ff7b72','#a5a5ff','#db61a2','#8b949e'],
+      up:'#f85149', down:'#3fb950', inv:'rgba(248,81,73,.18)'
+    } : {
+      text:'#1f2937', sub:'#6b7280', axis:'#d7dee8', split:'#eef2f7',
+      tipBg:'rgba(255,255,255,.97)', tipBorder:'#e6eaf0', tipText:'#1f2937',
+      palette:['#2563eb','#ea8600','#12a150','#7c3aed','#db2777','#0e9bb5','#c99a06','#16a34a','#dc2626','#5b5bd6','#c026d3','#8892a0'],
+      up:'#dc2626', down:'#16a34a', inv:'rgba(220,38,38,.13)'
+    };
+  }
+
+  // ---------- helpers ----------
+  function bg(hex,a){ // hex -> rgba
+    var h=hex.replace('#',''); if(h.length===3) h=h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+    var r=parseInt(h.substr(0,2),16),g=parseInt(h.substr(2,2),16),b=parseInt(h.substr(4,2),16);
+    return 'rgba('+r+','+g+','+b+','+a+')';
+  }
+  function cutoff(refISO, years){
+    if(!years || years===0) return null;
+    var d = new Date(refISO+'T00:00:00Z');
+    d.setUTCFullYear(d.getUTCFullYear()-years);
+    return d.toISOString().slice(0,10);
+  }
+  function mc(s){ // 'YYYY-MM' cutoff
+    return (state.years && state.years!==0) ? (D.meta.latest_tic ? monthMinus(D.meta.latest_tic, state.years) : null) : null;
+  }
+  function monthMinus(m,y){ var yy=parseInt(m.slice(0,4),10)-y; return yy+'-'+m.slice(5,7); }
+  function filt(pairs, cut){ if(!cut) return pairs; return pairs.filter(function(p){return p[0]>=cut;}); }
+  function fmtT(b){ return b==null?'—':(b/1000).toFixed(2)+' 万亿美元'; }
+  function fmtB(b){ return b==null?'—':b.toFixed(1)+' 十亿美元'; }
+  function pct(v,d){ return v==null?'—':(v>=0?'+':'')+v.toFixed(d==null?2:d)+'%'; }
+
+  function baseGrid(t){
+    return { top:34, left:62, right:22, bottom:44 };
+  }
+  function axisCommon(t){
+    return {
+      axisLine:{lineStyle:{color:t.axis}},
+      axisLabel:{color:t.sub,fontSize:11},
+      axisTick:{show:false},
+      splitLine:{lineStyle:{color:t.split}}
+    };
+  }
+  function tooltipCommon(t){
+    return {
+      backgroundColor:t.tipBg, borderColor:t.tipBorder, borderWidth:1,
+      textStyle:{color:t.tipText,fontSize:12},
+      axisPointer:{type:'cross', label:{backgroundColor:t.axis,color:'#fff'}}
+    };
+  }
+  function legendCommon(t){
+    return { top:2, textStyle:{color:t.sub,fontSize:11.5}, itemWidth:14, itemHeight:9, icon:'roundRect' };
+  }
+
+  // ---------- KPI ----------
+  function kpiCard(label, value, deltaHtml){
+    return '<div class="kpi"><div class="k-label">'+label+'</div>'
+      + '<div class="k-value">'+value+'</div>'
+      + '<div class="k-delta">'+(deltaHtml||'')+'</div></div>';
+  }
+  function deltaSpan(v, unit, decimals){
+    if(v==null) return '<span>—</span>';
+    var cls = v>0?'up':(v<0?'down':'');
+    var s = (v>0?'+':'') + v.toFixed(decimals==null?1:decimals) + unit;
+    return '<span class="'+cls+'">'+s+'</span>';
+  }
+
+  function renderKpis(){
+    // 模块一
+    var w = D.debt.weekly;
+    var n = w.total.length;
+    if(n){
+      var last = w.total[n-1], pub = w.public[n-1], ig = w.intragov[n-1];
+      var ref = Math.max(0, n-5);
+      var d4 = last[1]-w.total[ref][1];
+      document.getElementById('kpis1').innerHTML =
+        kpiCard('联邦债务总额 <span class="hint">('+last[0]+')</span>', fmtT(last[1]), '较4周前 '+deltaSpan(d4,' 十亿',1)) +
+        kpiCard('公众持有债务', fmtT(pub[1]), '占总债务 '+(pub[1]/last[1]*100).toFixed(1)+'%') +
+        kpiCard('政府内部持有', fmtT(ig[1]), '占总债务 '+(ig[1]/last[1]*100).toFixed(1)+'%') +
+        kpiCard('近4周净增', deltaSpan(d4,' 十亿',1), '（'+(n-1-ref)+' 周，周频）');
+    }
+    // 模块三
+    var tic = D.tic;
+    if(tic){
+      var m = tic.months.length, lastM = tic.months[m-1];
+      var tot = tic.total[m-1];
+      var jp = tic.focus[0].data[m-1], cn = tic.focus[1].data[m-1];
+      var prevIdx = Math.max(0, m-13);
+      var cnYoY = (cn!=null && tic.focus[1].data[prevIdx]!=null) ? (cn-tic.focus[1].data[prevIdx]) : null;
+      // 占公众持有债务比重
+      var pubMap = {}; D.debt.monthly_public.forEach(function(p){pubMap[p[0]]=p[1];});
+      var refPub = pubMap[lastM];
+      var share = refPub ? (tot/refPub*100) : null;
+      document.getElementById('kpis3').innerHTML =
+        kpiCard('外资持债总额 <span class="hint">('+lastM+')</span>', fmtT(tot), '占公众持有债务 '+(share==null?'—':share.toFixed(1)+'%')) +
+        kpiCard('最大持有方', tic.latest_rank[0] ? tic.latest_rank[0].name : '—', tic.latest_rank[0] ? fmtT(tic.latest_rank[0].value) : '—') +
+        kpiCard('中国大陆持仓', fmtT(cn), '同比 '+deltaSpan(cnYoY,' 十亿',1)) +
+        kpiCard('日本持仓', fmtT(jp), '最大海外持有方');
+    }
+  }
+
+  // ---------- charts ----------
+  function initChart(id){
+    var el = document.getElementById(id);
+    if(!el) return null;
+    var c = echarts.init(el, null, {renderer:'canvas'});
+    var raw = c.setOption.bind(c);
+    // 统一关闭首屏动画: 数据量大时渲染更利落, 也避免无谓的重绘
+    c.setOption = function(o, nm){ if(o && typeof o === 'object') o.animation = false; return raw(o, nm); };
+    return c;
+  }
+  function initAll(){
+    ['c_debt','c_struct_sun','c_struct_area','c_yield','c_curve','c_spread','c_real',
+     'c_tic_lines','c_tic_area','c_tic_bar','c_tic_share'].forEach(function(id){
+      var c = initChart(id);
+      if(c) charts[id] = c;
+    });
+  }
+
+  function yoySeries(pairs){
+    if(!pairs.length) return [];
+    var out=[];
+    for(var i=0;i<pairs.length;i++){
+      var d = new Date(pairs[i][0]+'T00:00:00Z');
+      var tgt = new Date(d.getTime()); tgt.setUTCFullYear(tgt.getUTCFullYear()-1);
+      var tiso = tgt.toISOString().slice(0,10);
+      // 找最接近且不晚于 tiso 的点
+      var best=null;
+      for(var j=i-1;j>=0 && j>i-70;j--){
+        if(pairs[j][0]<=tiso){ best=pairs[j][1]; break; }
+      }
+      if(best && pairs[i][1]!=null && best!==0) out.push([pairs[i][0], +(((pairs[i][1]-best)/best)*100).toFixed(2)]);
+    }
+    return out;
+  }
+
+  function renderDebt(){
+    var t = T(), ch = charts.c_debt; if(!ch) return;
+    var cut = cutoff(D.meta.latest_debt || D.meta.latest_yield, state.years);
+    var defs = [['联邦债务总额', D.debt.weekly.total, 0], ['公众持有', D.debt.weekly.public, 1], ['政府内部持有', D.debt.weekly.intragov, 2]];
+    var series = defs.map(function(d, i){
+      var data = state.debtMode==='yoy' ? yoySeries(filt(d[1], cut)) : filt(d[1], cut);
+      return {
+        name:d[0], type:'line', showSymbol:false, smooth:false, sampling:'lttb',
+        lineStyle:{width:i===0?2.2:1.6}, itemStyle:{color:t.palette[d[2]]},
+        emphasis:{focus:'series'}, connectNulls:true, data:data
+      };
+    });
+    ch.setOption({
+      color:t.palette, grid:baseGrid(t), legend:legendCommon(t),
+      tooltip:Object.assign(tooltipCommon(t), {
+        trigger:'axis', valueFormatter:function(v){ return state.debtMode==='yoy' ? (v==null?'—':v.toFixed(1)+'%') : fmtT(v); }
+      }),
+      xAxis:Object.assign({type:'time'}, axisCommon(t), {splitLine:{show:false}}),
+      yAxis:Object.assign({type:'value', scale:true}, axisCommon(t), {
+        axisLabel:{color:t.sub,fontSize:11, formatter:function(v){ return state.debtMode==='yoy' ? v+'%' : (v/1000).toFixed(0)+'万亿'; }},
+        name: state.debtMode==='yoy'?'同比 %':'万亿美元', nameTextStyle:{color:t.sub}
+      }),
+      series:series
+    }, true);
+  }
+
+  function renderStructureSun(){
+    var t = T(), ch = charts.c_struct_sun; if(!ch || !D.structure) return;
+    var mkt = D.structure.latest_items.map(function(it,i){
+      return {name:it.name, value:it.value, itemStyle:{color:t.palette[(i+2) % t.palette.length]}};
+    });
+    var data = [
+      {name:'可流通 Marketable', value:D.structure.latest_marketable, children:mkt,
+       itemStyle:{color:t.palette[0]}},
+      {name:'不可流通 Nonmarketable', value:D.structure.latest_nonmarketable,
+       itemStyle:{color:t.palette[1]}}
+    ];
+    document.getElementById('structHint').textContent = D.structure.latest_month || '';
+    ch.setOption({
+      color:t.palette,
+      tooltip:Object.assign(tooltipCommon(t), {
+        trigger:'item', valueFormatter:function(v){ return v==null?'—':(v/1000).toFixed(3)+' 万亿美元'; }
+      }),
+      series:[{
+        type:'sunburst', data:data, radius:['16%','92%'], sort:'desc',
+        itemStyle:{borderColor:t.tipBg, borderWidth:1.5},
+        label:{color:'#fff', fontSize:11, minAngle:8,
+          formatter:function(p){ var v=p.value; return p.name.split(' ')[0]+'\n'+(v==null?'':(v/1000).toFixed(2)+'万亿'); }},
+        levels:[{},
+          {r0:'16%', r:'52%', label:{rotate:0, fontSize:11.5}, itemStyle:{borderWidth:2}},
+          {r0:'54%', r:'92%', label:{align:'right', fontSize:10.5}, itemStyle:{borderWidth:1}}]
+      }]
+    }, true);
+  }
+
+  function renderStructureArea(){
+    var t = T(), ch = charts.c_struct_area; if(!ch || !D.structure) return;
+    var cut = mc();
+    var names = Object.keys(D.structure.classes);
+    var idx = [];
+    D.structure.months.forEach(function(m,i){ if(!cut || m>=cut) idx.push(i); });
+    var series = names.map(function(nm,i){
+      return {
+        name:nm, type:'line', stack:'mkt', showSymbol:false, areaStyle:{opacity:.72},
+        lineStyle:{width:1}, itemStyle:{color:t.palette[i]}, emphasis:{focus:'series'},
+        data:idx.map(function(i){ return [D.structure.months[i], D.structure.classes[nm][i]]; })
+      };
+    });
+    ch.setOption({
+      color:t.palette, grid:Object.assign(baseGrid(t),{top:52}),
+      legend:Object.assign(legendCommon(t), {top:2, type:'scroll'}),
+      tooltip:Object.assign(tooltipCommon(t), {trigger:'axis', valueFormatter:function(v){ return v==null?'—':(v/1000).toFixed(3)+'万亿'; }}),
+      xAxis:Object.assign({type:'time'}, axisCommon(t), {splitLine:{show:false}}),
+      yAxis:Object.assign({type:'value', scale:true}, axisCommon(t), {
+        axisLabel:{color:t.sub,fontSize:11, formatter:function(v){return (v/1000).toFixed(1)+'万亿';}},
+        name:'万亿美元', nameTextStyle:{color:t.sub}
+      }),
+      series:series
+    }, true);
+  }
+
+  function renderYield(){
+    var t = T(), ch = charts.c_yield; if(!ch) return;
+    var cut = cutoff(D.meta.latest_yield, state.years);
+    var order = ['1月','3月','6月','1年','2年','3年','5年','7年','10年','20年','30年'];
+    var showDefault = {'2年':1,'10年':1,'30年':1};
+    var selected = {};
+    order.forEach(function(k){ selected[k+'期'] = !!showDefault[k]; });
+    var series = order.map(function(k,i){
+      return {
+        name:k+'期', type:'line', showSymbol:false, sampling:'lttb', connectNulls:true,
+        lineStyle:{width: (k==='10年'?2.4:1.5)}, itemStyle:{color:t.palette[i]},
+        emphasis:{focus:'series'}, data:filt(D.yields.series[k]||[], cut)
+      };
+    });
+    ch.setOption({
+      color:t.palette, grid:baseGrid(t),
+      legend:Object.assign(legendCommon(t), {selected:selected}),
+      tooltip:Object.assign(tooltipCommon(t), {trigger:'axis', valueFormatter:function(v){ return v==null?'—':v.toFixed(2)+'%'; }}),
+      xAxis:Object.assign({type:'time'}, axisCommon(t), {splitLine:{show:false}}),
+      yAxis:Object.assign({type:'value', scale:true}, axisCommon(t), {
+        axisLabel:{color:t.sub,fontSize:11, formatter:function(v){return v+'%';}},
+        name:'收益率 %', nameTextStyle:{color:t.sub}
+      }),
+      series:series
+    }, true);
+  }
+
+  function renderCurve(){
+    var t = T(), ch = charts.c_curve; if(!ch || !D.curve) return;
+    var c = D.curve, n = c.snapshots.length;
+    var series = c.snapshots.map(function(s,i){
+      var isLast = (i===0);
+      return {
+        name:s.label + (s.date?('('+s.date+')'):''),
+        type:'line', smooth:true, symbol:'circle', symbolSize:isLast?6:4,
+        lineStyle:{width:isLast?3:1.4, type:isLast?'solid':'dashed'},
+        itemStyle:{color:isLast? t.palette[0] : t.palette[(i*2)%t.palette.length]},
+        emphasis:{focus:'series'}, data:s.values
+      };
+    });
+    ch.setOption({
+      color:t.palette, grid:Object.assign(baseGrid(t),{top:52}),
+      legend:Object.assign(legendCommon(t),{type:'scroll', top:2}),
+      tooltip:Object.assign(tooltipCommon(t), {trigger:'axis', valueFormatter:function(v){ return v==null?'—':v.toFixed(2)+'%'; }}),
+      xAxis:Object.assign({type:'category', boundaryGap:false, data:c.maturities}, axisCommon(t), {splitLine:{show:false}}),
+      yAxis:Object.assign({type:'value', scale:true}, axisCommon(t), {
+        axisLabel:{color:t.sub,fontSize:11, formatter:function(v){return v+'%';}}, name:'收益率 %', nameTextStyle:{color:t.sub}
+      }),
+      series:series
+    }, true);
+  }
+
+  function inversionAreas(pairs, cut){
+    var f = filt(pairs, cut), areas=[], start=null;
+    for(var i=0;i<f.length;i++){
+      var v=f[i][1];
+      if(v<0 && start===null) start=f[i][0];
+      if(v>=0 && start!==null){ areas.push([{xAxis:start},{xAxis:f[i-1][0]}]); start=null; }
+    }
+    if(start!==null && f.length) areas.push([{xAxis:start},{xAxis:f[f.length-1][0]}]);
+    return areas;
+  }
+
+  function renderSpread(){
+    var t = T(), ch = charts.c_spread; if(!ch) return;
+    var cut = cutoff(D.meta.latest_yield, state.years);
+    var keys = Object.keys(D.yields.spreads);
+    var areas = inversionAreas(D.yields.spreads[keys[0]]||[], cut);
+    var series = keys.map(function(k,i){
+      var s = {
+        name:k+' 利差', type:'line', showSymbol:false, sampling:'lttb', connectNulls:true,
+        lineStyle:{width:2}, itemStyle:{color: t.palette[i]}, emphasis:{focus:'series'},
+        data:filt(D.yields.spreads[k], cut),
+        markLine:{silent:true, symbol:'none', label:{color:t.sub,fontSize:10.5,formatter:'0'}, lineStyle:{color:t.axis,type:'dashed'}, data:[{yAxis:0}]}
+      };
+      if(i===0 && areas.length) s.markArea = {silent:true, itemStyle:{color:t.inv}, data:areas};
+      return s;
+    });
+    ch.setOption({
+      color:t.palette, grid:baseGrid(t), legend:legendCommon(t),
+      tooltip:Object.assign(tooltipCommon(t), {trigger:'axis', valueFormatter:function(v){ return v==null?'—':v.toFixed(2)+'%'; }}),
+      xAxis:Object.assign({type:'time'}, axisCommon(t), {splitLine:{show:false}}),
+      yAxis:Object.assign({type:'value', scale:true}, axisCommon(t), {
+        axisLabel:{color:t.sub,fontSize:11, formatter:function(v){return v+'%';}}, name:'利差 %', nameTextStyle:{color:t.sub}
+      }),
+      series:series
+    }, true);
+  }
+
+  function renderReal(){
+    var t = T(), ch = charts.c_real; if(!ch) return;
+    var cut = cutoff(D.meta.latest_yield, state.years);
+    var defs = [['名义收益率 (10年)', D.yields.real['名义10年']],
+                ['实际收益率 (TIPS 10年)', D.yields.real['实际10年']],
+                ['隐含通胀预期 (10年)', D.yields.real['通胀预期10年']]];
+    var series = defs.map(function(d,i){
+      return {name:d[0], type:'line', showSymbol:false, sampling:'lttb', connectNulls:true,
+        lineStyle:{width:i===2?2.2:1.6, type:i===2?'dashed':'solid'},
+        itemStyle:{color:t.palette[i===2?1:i]}, emphasis:{focus:'series'}, data:filt(d[1], cut)};
+    });
+    ch.setOption({
+      color:t.palette, grid:Object.assign(baseGrid(t),{top:52}), legend:Object.assign(legendCommon(t),{type:'scroll'}),
+      tooltip:Object.assign(tooltipCommon(t), {trigger:'axis', valueFormatter:function(v){ return v==null?'—':v.toFixed(2)+'%'; }}),
+      xAxis:Object.assign({type:'time'}, axisCommon(t), {splitLine:{show:false}}),
+      yAxis:Object.assign({type:'value', scale:true}, axisCommon(t), {
+        axisLabel:{color:t.sub,fontSize:11, formatter:function(v){return v+'%';}}, name:'%', nameTextStyle:{color:t.sub}
+      }),
+      series:series
+    }, true);
+  }
+
+  function renderTicLines(){
+    var t = T(), ch = charts.c_tic_lines; if(!ch || !D.tic) return;
+    var cut = mc();
+    var months = D.tic.months;
+    var series = D.tic.focus.map(function(s,i){
+      var data = [];
+      months.forEach(function(m,j){ if(!cut || m>=cut){ var v=s.data[j]; data.push([m, v==null?null:v]); } });
+      return {name:s.name, type:'line', showSymbol:false, connectNulls:true, smooth:true,
+        lineStyle:{width:2.2}, itemStyle:{color:t.palette[i]}, emphasis:{focus:'series'}, data:data};
+    });
+    ch.setOption({
+      color:t.palette, grid:baseGrid(t), legend:legendCommon(t),
+      tooltip:Object.assign(tooltipCommon(t), {trigger:'axis', valueFormatter:function(v){ return v==null?'—':fmtT(v); }}),
+      xAxis:Object.assign({type:'time'}, axisCommon(t), {splitLine:{show:false}}),
+      yAxis:Object.assign({type:'value', scale:true}, axisCommon(t), {
+        axisLabel:{color:t.sub,fontSize:11, formatter:function(v){return (v/1000).toFixed(2)+'万亿';}}, name:'万亿美元', nameTextStyle:{color:t.sub}
+      }),
+      series:series
+    }, true);
+  }
+
+  function renderTicArea(){
+    var t = T(), ch = charts.c_tic_area; if(!ch || !D.tic) return;
+    var cut = mc();
+    var months = D.tic.months;
+    var series = D.tic.components.map(function(s,i){
+      var isOther = (s.name === '其他');
+      var data = [];
+      months.forEach(function(m,j){ if(!cut || m>=cut){ var v=s.data[j]; data.push([m, v==null?0:v]); } });
+      return {name:s.name, type:'line', stack:'tic', showSymbol:false, areaStyle:{opacity:.74},
+        lineStyle:{width:1}, itemStyle:{color: isOther ? (state.dark?'#4d5866':'#bcc4cf') : t.palette[i%t.palette.length]},
+        emphasis:{focus:'series'}, data:data};
+    });
+    ch.setOption({
+      color:t.palette, grid:Object.assign(baseGrid(t),{top:52}),
+      legend:Object.assign(legendCommon(t),{type:'scroll'}),
+      tooltip:Object.assign(tooltipCommon(t), {trigger:'axis', valueFormatter:function(v){ return v==null?'—':fmtT(v); }}),
+      xAxis:Object.assign({type:'time'}, axisCommon(t), {splitLine:{show:false}}),
+      yAxis:Object.assign({type:'value', scale:true}, axisCommon(t), {
+        axisLabel:{color:t.sub,fontSize:11, formatter:function(v){return (v/1000).toFixed(1)+'万亿';}}, name:'万亿美元', nameTextStyle:{color:t.sub}
+      }),
+      series:series
+    }, true);
+  }
+
+  function renderTicBar(){
+    var t = T(), ch = charts.c_tic_bar; if(!ch || !D.tic) return;
+    document.getElementById('ticHint').textContent = D.tic.latest_month || '';
+    var arr = D.tic.latest_rank.slice().reverse();
+    ch.setOption({
+      grid:{top:14,left:88,right:64,bottom:22},
+      tooltip:Object.assign(tooltipCommon(t), {trigger:'axis', axisPointer:{type:'shadow'}, valueFormatter:function(v){return fmtT(v);}}),
+      xAxis:Object.assign({type:'value'}, axisCommon(t), {axisLabel:{color:t.sub,fontSize:11, formatter:function(v){return (v/1000).toFixed(1)+'万亿';}}}),
+      yAxis:Object.assign({type:'category', data:arr.map(function(x){return x.name;})}, axisCommon(t), {splitLine:{show:false}, axisLabel:{color:t.text,fontSize:11.5}}),
+      series:[{
+        type:'bar', data:arr.map(function(x,i){ return {value:x.value, itemStyle:{color: i===arr.length-1? t.palette[0] : bg(t.palette[0], .45+0.55*i/arr.length)}};}),
+        barWidth:'62%',
+        label:{show:true, position:'right', color:t.sub, fontSize:10.5, formatter:function(p){return (p.value/1000).toFixed(2)+'万亿';}}
+      }]
+    }, true);
+  }
+
+  function renderTicShare(){
+    var t = T(), ch = charts.c_tic_share; if(!ch || !D.tic) return;
+    var cut = mc();
+    var months = D.tic.months;
+    var pubMap = {}; D.debt.monthly_public.forEach(function(p){pubMap[p[0]]=p[1];});
+    var bars=[], line=[];
+    months.forEach(function(m,j){
+      if(cut && m<cut) return;
+      var v = D.tic.total[j];
+      bars.push([m, v==null?0:v]);
+      var p = pubMap[m];
+      line.push([m, (p && v!=null) ? +((v/p)*100).toFixed(2) : null]);
+    });
+    ch.setOption({
+      color:t.palette, grid:Object.assign(baseGrid(t),{right:62}), legend:legendCommon(t),
+      tooltip:Object.assign(tooltipCommon(t), {trigger:'axis'}),
+      xAxis:Object.assign({type:'time'}, axisCommon(t), {splitLine:{show:false}}),
+      yAxis:[
+        Object.assign({type:'value', scale:true}, axisCommon(t), {
+          axisLabel:{color:t.sub,fontSize:11, formatter:function(v){return (v/1000).toFixed(1)+'万亿';}}, name:'外资持债', nameTextStyle:{color:t.sub}
+        }),
+        Object.assign({type:'value', scale:true}, axisCommon(t), {
+          splitLine:{show:false}, axisLabel:{color:t.sub,fontSize:11, formatter:function(v){return v+'%';}}, name:'占比', nameTextStyle:{color:t.sub}
+        })
+      ],
+      series:[
+        {name:'外资持债总量', type:'bar', data:bars, barWidth:'55%', itemStyle:{color:bg(t.palette[0],.72)}},
+        {name:'占公众持有债务比重', type:'line', yAxisIndex:1, showSymbol:false, connectNulls:true, smooth:true,
+         lineStyle:{width:2.4}, itemStyle:{color:t.palette[1]}, data:line}
+      ]
+    }, true);
+  }
+
+  function renderAll(){
+    var tasks = [
+      ['KPI', renderKpis], ['债务规模', renderDebt], ['债务结构', renderStructureSun],
+      ['券种构成', renderStructureArea], ['收益率', renderYield], ['曲线', renderCurve],
+      ['利差', renderSpread], ['实际利率', renderReal], ['TIC走势', renderTicLines],
+      ['TIC构成', renderTicArea], ['TIC排名', renderTicBar], ['TIC占比', renderTicShare]
+    ];
+    var errs = [];
+    tasks.forEach(function(p){
+      try { p[1](); } catch(e){ errs.push(p[0]+': '+(e && e.message ? e.message : e)); if(window.console) console.error(p[0], e); }
+    });
+    var box = document.getElementById('errBox');
+    if(box){
+      if(errs.length){ box.style.display='block'; box.textContent='渲染异常 -> '+errs.join('  |  '); }
+      else { box.style.display='none'; box.textContent=''; }
+    }
+  }
+
+  // ---------- interactions ----------
+  document.getElementById('rangeSeg').addEventListener('click', function(e){
+    var b = e.target.closest('button'); if(!b) return;
+    Array.prototype.forEach.call(this.querySelectorAll('button'), function(x){x.classList.remove('active');});
+    b.classList.add('active');
+    state.years = parseInt(b.getAttribute('data-years'),10);
+    renderAll();
+  });
+  document.getElementById('debtMode').addEventListener('click', function(e){
+    var b = e.target.closest('button'); if(!b) return;
+    Array.prototype.forEach.call(this.querySelectorAll('button'), function(x){x.classList.remove('active');});
+    b.classList.add('active');
+    state.debtMode = b.getAttribute('data-mode');
+    renderDebt();
+  });
+  document.getElementById('themeBtn').addEventListener('click', function(){
+    state.dark = !state.dark;
+    document.documentElement.setAttribute('data-theme', state.dark?'dark':'light');
+    this.textContent = state.dark?'切换亮色':'切换暗色';
+    renderAll();
+  });
+  window.addEventListener('resize', function(){ Object.keys(charts).forEach(function(k){ charts[k] && charts[k].resize(); }); });
+
+  // ---------- boot ----------
+  function boot(){
+    document.getElementById('genTime').textContent = D.meta.generated;
+    var ul = document.getElementById('srcList');
+    (D.meta.sources||[]).forEach(function(s){ var li=document.createElement('li'); li.textContent=s; ul.appendChild(li); });
+    var li=document.createElement('li');
+    li.textContent='历史区间：'+D.meta.start_year+' 年至今（窗口内各源以其可得范围为限）';
+    ul.appendChild(li);
+    if(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches){
+      state.dark = true;
+      document.documentElement.setAttribute('data-theme','dark');
+      document.getElementById('themeBtn').textContent='切换亮色';
+    }
+    initAll();
+    renderAll();
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+})();
+</script>
+</body>
+</html>
