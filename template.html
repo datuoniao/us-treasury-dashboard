@@ -121,6 +121,7 @@
     <span class="badge">收益率：周频（周均）</span>
     <span class="badge">债务规模：周频</span>
     <span class="badge">债务结构 / TIC：月频</span>
+    <span class="badge">日本对比：2018 至今</span>
     <span class="badge">已剔除日频展示</span>
   </div>
   <div id="errBox"></div>
@@ -195,6 +196,13 @@
         <div class="card-hd"><span>外资持债总量与占联邦债务总额比重</span></div>
         <div class="chart" id="c_tic_share"></div>
       </div>
+      <div class="card wide">
+        <div class="card-hd">
+          <span>日本：持仓 × 美元日元 × 美日10年利差（2018 至今）</span>
+          <span class="hint" id="jpHint"></span>
+        </div>
+        <div class="chart tall" id="c_japan"></div>
+      </div>
     </div>
   </section>
 
@@ -203,6 +211,7 @@
     <ul id="srcList"></ul>
     <li>本看板不使用日频数据：日频来源（收益率、逐日债务）均已按 <b>周五周均 / 周末值</b> 重采样为周频；TIC 与债务结构保留其天然月频。</li>
     <li>外资持债占比的分母为<b>联邦债务总额</b>（TIC 外资口径对应全部美债）；若改用「公众持有债务」作分母，占比会被系统性高估。</li>
+    <li>「日本：持仓 × 美元日元 × 美日10年利差」为<b>固定 2018 年至今</b>视图（不随时间范围切换）：持仓为 TIC 月频，美元/日元与利差为周五周频；利差＝美债10年 − 日本10年（两国同日对齐后相减）。</li>
     <li>TIC 持仓按<b>托管地</b>而非实际持有人统计，无法精确归属各国真实持有量。</li>
     <li>涨跌类配色遵循中文市场习惯：<span class="up">上涨为红</span>、<span class="down">下跌为绿</span>。</li>
   </div>
@@ -334,7 +343,7 @@
   }
   function initAll(){
     ['c_debt','c_struct_sun','c_struct_area','c_yield','c_curve','c_spread','c_real',
-     'c_tic_lines','c_tic_area','c_tic_bar','c_tic_share'].forEach(function(id){
+     'c_tic_lines','c_tic_area','c_tic_bar','c_tic_share','c_japan'].forEach(function(id){
       var c = initChart(id);
       if(c) charts[id] = c;
     });
@@ -646,12 +655,62 @@
     }, true);
   }
 
+  // 日本：持仓 × 美元日元 × 美日10年利差  (固定 2018 至今，不随全局时间范围变化)
+  function renderJapan(){
+    var t = T(), ch = charts.c_japan; if(!ch || !D.japan) return;
+    var J = D.japan;
+    var L = J.latest || {};
+    var hint = document.getElementById('jpHint');
+    if(hint){
+      var bits = [];
+      if(L.spread_date!=null) bits.push(L.spread_date + ' 利差 ' + (L.spread==null?'—':L.spread.toFixed(2)+'%'));
+      if(L.fx!=null) bits.push('USDJPY ' + L.fx.toFixed(2));
+      hint.textContent = bits.join(' · ');
+    }
+    // 月频持仓 -> 该月首日，便于落在时间轴上
+    var hold = (J.holdings||[]).map(function(p){ return [p[0]+'-01', p[1]]; });
+    var ax = axisCommon(t);
+    ch.setOption({
+      color:t.palette,
+      grid:Object.assign(baseGrid(t), {top:58, right:132}),
+      legend:Object.assign(legendCommon(t), {top:2, type:'scroll'}),
+      tooltip:Object.assign(tooltipCommon(t), {trigger:'axis'}),
+      xAxis:Object.assign({type:'time', min:J.start}, ax, {splitLine:{show:false}}),
+      yAxis:[
+        Object.assign({type:'value', scale:true}, ax, {
+          name:'日本持仓', nameTextStyle:{color:t.sub},
+          axisLabel:{color:t.sub, fontSize:11, formatter:function(v){ return (v/1000).toFixed(2)+'万亿'; }}
+        }),
+        Object.assign({type:'value', scale:true}, ax, {
+          name:'美元/日元', nameTextStyle:{color:t.sub}, position:'right', splitLine:{show:false},
+          axisLabel:{color:t.sub, fontSize:11}
+        }),
+        Object.assign({type:'value', scale:true}, ax, {
+          name:'利差', nameTextStyle:{color:t.sub}, position:'right', offset:66, splitLine:{show:false},
+          axisLabel:{color:t.sub, fontSize:11, formatter:function(v){ return v+'%'; }}
+        })
+      ],
+      series:[
+        {name:'日本持仓', type:'bar', data:hold, barWidth:'42%',
+         itemStyle:{color:bg(t.palette[0],.6)},
+         tooltip:{valueFormatter:function(v){ return v==null?'—':(v/1000).toFixed(3)+' 万亿美元'; }}},
+        {name:'美元/日元', type:'line', yAxisIndex:1, showSymbol:false, connectNulls:true,
+         lineStyle:{width:2}, itemStyle:{color:t.palette[1]}, data:J.fx,
+         tooltip:{valueFormatter:function(v){ return v==null?'—':v.toFixed(2); }}},
+        {name:'美日10年利差', type:'line', yAxisIndex:2, showSymbol:false, connectNulls:true,
+         lineStyle:{width:2}, itemStyle:{color:t.palette[2]}, data:J.spread,
+         tooltip:{valueFormatter:function(v){ return v==null?'—':v.toFixed(2)+'%'; }}}
+      ]
+    }, true);
+  }
+
   function renderAll(){
     var tasks = [
       ['KPI', renderKpis], ['债务规模', renderDebt], ['债务结构', renderStructureSun],
       ['券种构成', renderStructureArea], ['收益率', renderYield], ['曲线', renderCurve],
       ['利差', renderSpread], ['实际利率', renderReal], ['TIC走势', renderTicLines],
-      ['TIC构成', renderTicArea], ['TIC排名', renderTicBar], ['TIC占比', renderTicShare]
+      ['TIC构成', renderTicArea], ['TIC排名', renderTicBar], ['TIC占比', renderTicShare],
+      ['日本对比', renderJapan]
     ];
     var errs = [];
     tasks.forEach(function(p){

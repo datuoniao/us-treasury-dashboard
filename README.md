@@ -7,6 +7,7 @@
 | **规模与结构** | 联邦政府总债务（Debt to the Penny）、公众持有 vs 政府内部持有、按证券类型的债务结构（MSPD） |
 | **收益率与曲线** | 名义收益率曲线（1M–30Y）、关键期限走势、10Y−2Y / 10Y−3M 利差、TIPS 实际收益率与盈亏平衡通胀预期 |
 | **海外持仓 (TIC)** | 各国/地区持有美债规模、主要持有国排名与份额、头部持有国时序演变 |
+| **日本专题（2018 至今）** | 日本持仓 × 美元/日元汇率 × 美日10年利差 三轴对比 |
 
 ## 在线预览
 
@@ -24,6 +25,11 @@
 | 联邦政府总债务 | Treasury Fiscal Data API — *Debt to the Penny* | 日 | **周（周五）** |
 | 债务结构 | Treasury Fiscal Data API — *MSPD Table 1* | 月 | 月 |
 | 各国持有美债 | 美国财政部 TIC — `mfhhis01.txt`（历史）/ `slt_table5.txt`（最新） | 月 | 月 |
+| 美元/日元汇率 | FRED — `DEXJPUS` | 日 | **周（周五）** |
+| 日本10年国债收益率 | 日本财务省 — 国債金利情報 `jgbcm_all.csv` / `jgbcm.csv` | 日 | **周（周五）** |
+| 美日10年利差 | 自行计算（美债10年 − 日本10年，同日对齐后相减） | — | **周（周五）** |
+
+> 日本专题图固定显示 **2018 年至今**，不随时间范围切换：持仓为月频，汇率与利差为周频。
 
 ## 频率口径说明
 
@@ -69,6 +75,8 @@ python build_dashboard.py
 ## 环境注记
 
 - **抓取必须由 shell 直接调用 `curl`**：本项目采用「shell 抓取 + Python 本地解析」的两段式架构。在受限网络环境下，Python 的 `urllib` / `subprocess` 发起的网络请求会被拒绝，而 shell 直接调 `curl` 可稳定通过。
+- **FRED 抓取两个坑**（见 `fetch_data.sh`）：① `fred.stlouisfed.org` 的 CA 吊销检查不可达，不加 `-k` 会 TLS 失败返回 `000`；② 发送浏览器 User-Agent 会被对端**重置连接**（curl rc=56），故用 `dl_noua` 不发送自定义 UA。
+- **日本财务省 CSV 为 Shift-JIS 编码**，日期是日本年号（`H30.1.4`＝2018-01-04，`R1.5.1`＝2019-05-01），需专用解析（`jp_era_to_iso`），不能用按 UTF-8 读取的通用加载器。
 - **Python 依赖**：仅使用标准库（`csv`/`io`/`json`/`re`/`datetime`），无需额外安装第三方包。
 - **本地 git 推送**：若所在环境存在证书吊销检查问题（schannel `CRYPT_E_NO_REVOCATION_CHECK`），可为该仓库单独设置 `git config http.sslVerify false` 规避。
 

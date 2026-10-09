@@ -429,6 +429,145 @@ def build_tic():
 
 
 # ----------------------------------------------------------------------------
+# 日本对比：日本持仓(TIC) / 美元日元汇率 / 美日10年利差
+# ----------------------------------------------------------------------------
+JP_ERA_BASE = {"S": 1925, "H": 1988, "R": 2018}   # 昭和 / 平成 / 令和
+JP_START = "2018-01-01"                            # 日频序列起点
+JP_START_M = "2018-01"                             # 月频序列起点
+
+
+def jp_era_to_iso(s):
+    """日本年号日期 -> ISO。'H30.1.4' -> '2018-01-04'；无法识别返回 None。"""
+    s = s.strip().lstrip("\ufeff")
+    if len(s) < 3 or s[0] not in JP_ERA_BASE:
+        return None
+    parts = s[1:].split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        y, m, d = (int(x) for x in parts)
+        return date(JP_ERA_BASE[s[0]] + y, m, d).isoformat()
+    except ValueError:
+        return None
+
+
+def load_jgb_10y():
+    """日本财务省国债利率 CSV（Shift-JIS 编码 + 日本年号日期）-> [(iso_date, 10年利率)]"""
+    merged = {}
+    for name in ("jp_jgbcm_all.csv", "jp_jgbcm_current.csv"):
+        path = os.path.join(RAW, name)
+        if not os.path.exists(path):
+            log("  ! 缺少 %s" % name)
+            continue
+        # 注意：该文件是 Shift-JIS，不能用 load_text（其按 utf-8 读）
+        with open(path, "r", encoding="shift_jis", errors="replace") as f:
+            lines = f.read().splitlines()
+        hidx = next((i for i, ln in enumerate(lines[:6]) if "基準日" in ln), None)
+        if hidx is None:
+            log("  ! %s 未找到表头" % name)
+            continue
+        cols = [c.strip().lstrip("\ufeff") for c in lines[hidx].split(",")]
+        if "10年" not in cols:
+            log("  ! %s 无「10年」列" % name)
+            continue
+        ci = cols.index("10年")
+        n = 0
+        for ln in lines[hidx + 1:]:
+            p = ln.split(",")
+            if len(p) <= ci:
+                continue
+            iso = jp_era_to_iso(p[0])
+            vs = p[ci].strip()
+            if not iso or vs in ("", "-"):
+                continue
+            try:
+                merged[iso] = float(vs)
+                n += 1
+            except ValueError:
+                continue
+        log("  %s: %d 条日频" % (name, n))
+    return sorted(merged.items())
+
+
+def build_japan(y10_weekly, tic, prev=None):
+    log("解析日本对比数据（日本持仓 / 美元日元 / 美日10年利差）...")
+    # 1) 美元日元汇率（FRED DEXJPUS，日频）
+    fx = []
+    if os.path.exists(os.path.join(RAW, "fx_usdjpy.csv")):
+        for ln in load_text("fx_usdjpy.csv").splitlines()[1:]:
+            p = ln.split(",")
+            if len(p) < 2:
+                continue
+            ds, vs = p[0].strip(), p[1].strip()
+            if not ds or vs in ("", ".", "NA", "NaN"):
+                continue
+            try:
+                fx.append((ds, float(vs)))
+            except ValueError:
+                continue
+    else:
+        log("  ! 缺少 fx_usdjpy.csv")
+    log("  美元日元 %d 条日频" % len(fx))
+
+    # 全部日频 -> 周五周频（与看板其余部分口径一致）
+    fx_w = dict(to_weekly(fx, "mean", 3))
+    jp10_w = dict(to_weekly(load_jgb_10y(), "mean", 3))
+    # 抓取不完整（为空，或比上次缓存明显短，例如全历史文件下载失败只剩当年文件）
+    # 时复用上次缓存，避免整条线断裂或被截断。新序列正常应 >= 缓存长度。
+    if prev:
+        old_fx = prev.get("fx") or []
+        old_jp = prev.get("jp10") or []
+        if len(fx_w) < len(old_fx):
+            log("  ! 美元日元仅 %d 点 < 缓存 %d 点，复用缓存" % (len(fx_w), len(old_fx)))
+            fx_w = dict(old_fx)
+        if len(jp10_w) < len(old_jp):
+            log("  ! 日本10年仅 %d 点 < 缓存 %d 点，复用缓存" % (len(jp10_w), len(old_jp)))
+            jp10_w = dict(old_jp)
+    us10_w = {d: v for d, v in (y10_weekly or [])}
+
+    # 2) 美日10年利差：美债10年 − 日本10年，在同一周五网格上对齐
+    spread = [(d, round(us10_w[d] - jp10_w[d], 3))
+              for d in sorted(set(us10_w) & set(jp10_w))
+              if us10_w[d] is not None and jp10_w[d] is not None]
+
+    # 3) 日本持仓（TIC，月频）
+    holdings = []
+    if tic and tic.get("months"):
+        jp = next((s.get("data") for s in tic.get("focus", []) if s.get("name") == "日本"), None)
+        if jp:
+            holdings = [(m, v) for m, v in zip(tic["months"], jp) if v is not None]
+
+    def cut(seq, start):
+        return [(d, v) for d, v in sorted(seq) if d >= start]
+
+    fx_w = cut(fx_w.items(), JP_START)
+    jp10_w = cut(jp10_w.items(), JP_START)
+    us10_w = cut(us10_w.items(), JP_START)
+    spread = cut(spread, JP_START)
+    holdings = cut(holdings, JP_START_M)
+
+    log("  %s 之后: 汇率 %d / 日本10年 %d / 美债10年 %d / 利差 %d / 持仓 %d"
+        % (JP_START, len(fx_w), len(jp10_w), len(us10_w), len(spread), len(holdings)))
+    last = lambda s: s[-1][1] if s else None
+    last_d = lambda s: s[-1][0] if s else None
+    return {
+        "start": JP_START,
+        "fx": fx_w,
+        "jp10": jp10_w,
+        "us10": us10_w,
+        "spread": spread,
+        "holdings": holdings,
+        "latest": {
+            "spread_date": last_d(spread), "spread": last(spread),
+            "fx_date": last_d(fx_w), "fx": last(fx_w),
+            "jp10_date": last_d(jp10_w), "jp10": last(jp10_w),
+            "us10_date": last_d(us10_w), "us10": last(us10_w),
+            "holdings_month": last_d(holdings), "holdings": last(holdings),
+        },
+    }
+
+
+# ----------------------------------------------------------------------------
 # 曲线快照
 # ----------------------------------------------------------------------------
 def nearest_on_or_before(pairs, tgt):
@@ -464,10 +603,19 @@ def build_curve(yields, latest_iso):
 # ----------------------------------------------------------------------------
 def main():
     data = {}
+    prev = {}
+    if os.path.exists(CACHE):
+        try:
+            with open(CACHE, "r", encoding="utf-8") as f:
+                prev = json.load(f)
+        except (ValueError, OSError):
+            prev = {}
     data["yields"] = build_yields()
     data["debt"] = build_debt()
     data["structure"] = build_structure()
     data["tic"] = build_tic()
+    data["japan"] = build_japan(data["yields"]["series"].get("10年"), data["tic"],
+                                prev.get("japan"))
 
     y_dates = [d for s in data["yields"]["series"].values() for d, _ in s]
     latest_yield = max(y_dates) if y_dates else None
@@ -486,6 +634,8 @@ def main():
             "美国财政部 U.S. Treasury - Daily Treasury Par Yield Curve / Real Yield Curve (H.15 原始来源)",
             "美国财政部 Fiscal Data - Debt to the Penny / MSPD 月度债务报表",
             "美国财政部 TIC - Major Foreign Holders of Treasury Securities",
+            "美国圣路易斯联储 FRED - DEXJPUS (美元/日元 日频汇率)",
+            "日本财务省 Ministry of Finance Japan - 国債金利情報 (JGB 日频利率)",
         ],
     }
 
